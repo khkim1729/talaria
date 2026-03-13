@@ -34,7 +34,6 @@ class ClassificationHead(nn.Module):
         self.gap = nn.AdaptiveAvgPool3d(1)
 
         self.t_head = nn.Sequential(
-            nn.Flatten(),
             nn.Linear(in_ch, 256),
             nn.LayerNorm(256),
             nn.GELU(),
@@ -43,7 +42,6 @@ class ClassificationHead(nn.Module):
         )
 
         self.n_head = nn.Sequential(
-            nn.Flatten(),
             nn.Linear(in_ch, 128),
             nn.LayerNorm(128),
             nn.GELU(),
@@ -59,7 +57,7 @@ class ClassificationHead(nn.Module):
             t_logit: (B, t_classes)
             n_logit: (B, n_classes)
         """
-        x = self.gap(deep_feat).squeeze(-1).squeeze(-1).squeeze(-1)  # (B, 320)
+        x = self.gap(deep_feat).flatten(1)  # (B, 320)
         return self.t_head(x), self.n_head(x)
 
 
