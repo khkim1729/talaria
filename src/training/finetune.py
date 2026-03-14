@@ -19,7 +19,7 @@ Config YAML keys:
     t_classes:       int   4
     n_classes:       int   2
     manifold_mixup:
-      enable:        bool  False
+      enable:        bool  True
       alpha:         float 2.0
       prob:          float 1.0
 """
@@ -53,7 +53,7 @@ def train_one_epoch(
     scaler,
     device,
     epoch,
-    manifold_mixup_enable=False,
+    manifold_mixup_enable=True,
     manifold_mixup_alpha=2.0,
     manifold_mixup_prob=1.0,
 ):
@@ -164,7 +164,7 @@ def main():
         cfg = yaml.safe_load(f)
 
     manifold_mixup_cfg = cfg.get('manifold_mixup', {})
-    manifold_mixup_enable = manifold_mixup_cfg.get('enable', False)
+    manifold_mixup_enable = manifold_mixup_cfg.get('enable', True)
     manifold_mixup_alpha = manifold_mixup_cfg.get('alpha', 2.0)
     manifold_mixup_prob = manifold_mixup_cfg.get('prob', 1.0)
 

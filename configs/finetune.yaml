@@ -37,7 +37,7 @@ weight_decay: 0.01
 
 # --- Optional: Manifold Mixup (training forward pass only) ---
 manifold_mixup:
-  enable: false
+  enable: true
   alpha: 2.0
   prob: 1.0
 

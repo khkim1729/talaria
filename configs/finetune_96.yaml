@@ -19,6 +19,6 @@ experiment_dir: /home/introai14/talaria/experiments
 
 # Optional manifold mixup during training only
 manifold_mixup:
-  enable: false
+  enable: true
   alpha: 2.0
   prob: 1.0

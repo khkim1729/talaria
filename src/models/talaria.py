@@ -57,7 +57,7 @@ class TALARIAModel(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        apply_manifold_mixup: bool = False,
+        apply_manifold_mixup: bool = True,
         mixup_alpha: float = 2.0,
         mixup_prob: float = 1.0,
         perm_idx: Optional[torch.Tensor] = None,

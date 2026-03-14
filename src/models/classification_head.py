@@ -53,7 +53,7 @@ class ClassificationHead(nn.Module):
     def forward(
         self,
         deep_feat: torch.Tensor,
-        apply_manifold_mixup: bool = False,
+        apply_manifold_mixup: bool = True,
         mixup_alpha: float = 2.0,
         mixup_prob: float = 1.0,
         perm_idx: Optional[torch.Tensor] = None,
@@ -75,8 +75,15 @@ class ClassificationHead(nn.Module):
         mixup_lam: Optional[float] = None
         mixup_perm: Optional[torch.Tensor] = None
 
-        if self.training and apply_manifold_mixup and torch.rand((), device=x.device) < mixup_prob:
-            bsz = x.size(0)
+        bsz = x.size(0)
+        can_apply_mixup = bsz > 1 and mixup_prob > 0.0 and mixup_alpha > 0.0
+
+        if (
+            self.training
+            and apply_manifold_mixup
+            and can_apply_mixup
+            and torch.rand((), device=x.device) < min(float(mixup_prob), 1.0)
+        ):
             mixup_perm = perm_idx if perm_idx is not None else torch.randperm(bsz, device=x.device)
 
             if lam is None:
