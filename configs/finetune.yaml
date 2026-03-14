@@ -35,6 +35,12 @@ batch_size:  4
 num_workers: 4
 weight_decay: 0.01
 
+# --- Optional: Manifold Mixup (training forward pass only) ---
+manifold_mixup:
+  enable: true
+  alpha: 2.0
+  prob: 1.0
+
 # --- Inference ---
 seg_threshold: 0.5    # Binary mask threshold after sigmoid
 

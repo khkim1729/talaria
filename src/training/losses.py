@@ -261,8 +261,37 @@ class TALARIALoss(nn.Module):
 
         self.t_seg_loss = BCEDiceLoss(bce_weight=0.5, dice_weight=0.5)
         self.n_seg_loss = FocalTverskyLoss(alpha=0.3, beta=0.7, gamma=0.75)
-        self.t_cls_loss = nn.CrossEntropyLoss(weight=torch.tensor([1.0, 1.3, 0.8, 0.7]).cuda(), ignore_index=-1)
-        self.n_cls_loss = nn.CrossEntropyLoss(weight=torch.tensor([1.0, 6.5]).cuda(), ignore_index=-1)
+        self.register_buffer('t_cls_weight', torch.tensor([1.0, 1.3, 0.8, 0.7], dtype=torch.float32))
+        self.register_buffer('n_cls_weight', torch.tensor([1.0, 6.5], dtype=torch.float32))
+        self.t_cls_loss = nn.CrossEntropyLoss(weight=self.t_cls_weight, ignore_index=-1)
+        self.n_cls_loss = nn.CrossEntropyLoss(weight=self.n_cls_weight, ignore_index=-1)
+
+    def _soft_cross_entropy(
+        self,
+        logits: torch.Tensor,
+        soft_targets: torch.Tensor,
+        class_weight: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """Soft-target cross entropy with optional class weighting."""
+        log_probs = F.log_softmax(logits, dim=-1)
+
+        if class_weight is None:
+            return -(soft_targets * log_probs).sum(dim=-1).mean()
+
+        weighted_targets = soft_targets * class_weight.unsqueeze(0)
+        normalizer = weighted_targets.sum(dim=-1).clamp_min(1e-12)
+        return (-(weighted_targets * log_probs).sum(dim=-1) / normalizer).mean()
+
+    def _mixup_soft_targets(
+        self,
+        hard_targets: torch.Tensor,
+        num_classes: int,
+        lam: float,
+        perm: torch.Tensor,
+        dtype: torch.dtype,
+    ) -> torch.Tensor:
+        one_hot = F.one_hot(hard_targets, num_classes=num_classes).to(dtype=dtype)
+        return lam * one_hot + (1.0 - lam) * one_hot[perm]
 
     def forward(
         self,
@@ -274,6 +303,10 @@ class TALARIALoss(nn.Module):
         n_seg_gt: Optional[torch.Tensor] = None,
         t_stage_gt: Optional[torch.Tensor] = None,
         n_stage_gt: Optional[torch.Tensor] = None,
+        mixup_lam: Optional[float] = None,
+        mixup_perm: Optional[torch.Tensor] = None,
+        t_stage_soft: Optional[torch.Tensor] = None,
+        n_stage_soft: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, dict]:
         losses = {}
         total  = torch.tensor(0.0, device=t_seg_logit.device)
@@ -289,17 +322,40 @@ class TALARIALoss(nn.Module):
             total = total + self.n_seg_w * l
 
         if t_stage_gt is not None:
-            l = self.t_cls_loss(t_cls_logit, t_stage_gt)
+            if t_stage_soft is not None:
+                l = self._soft_cross_entropy(t_cls_logit, t_stage_soft.to(dtype=t_cls_logit.dtype), self.t_cls_weight)
+            elif mixup_lam is not None and mixup_perm is not None:
+                t_soft = self._mixup_soft_targets(
+                    hard_targets=t_stage_gt,
+                    num_classes=t_cls_logit.shape[-1],
+                    lam=mixup_lam,
+                    perm=mixup_perm,
+                    dtype=t_cls_logit.dtype,
+                )
+                l = self._soft_cross_entropy(t_cls_logit, t_soft, self.t_cls_weight)
+            else:
+                l = self.t_cls_loss(t_cls_logit, t_stage_gt)
             losses['t_cls'] = l.item()
             total = total + self.t_cls_w * l
 
         if n_stage_gt is not None:
-            l = self.n_cls_loss(n_cls_logit, n_stage_gt)
+            if n_stage_soft is not None:
+                l = self._soft_cross_entropy(n_cls_logit, n_stage_soft.to(dtype=n_cls_logit.dtype), self.n_cls_weight)
+            elif mixup_lam is not None and mixup_perm is not None:
+                n_soft = self._mixup_soft_targets(
+                    hard_targets=n_stage_gt,
+                    num_classes=n_cls_logit.shape[-1],
+                    lam=mixup_lam,
+                    perm=mixup_perm,
+                    dtype=n_cls_logit.dtype,
+                )
+                l = self._soft_cross_entropy(n_cls_logit, n_soft, self.n_cls_weight)
+            else:
+                l = self.n_cls_loss(n_cls_logit, n_stage_gt)
             losses['n_cls'] = l.item()
             total = total + self.n_cls_w * l
 
         losses['total'] = total.item()
         return total, losses
-
 
 

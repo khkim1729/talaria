@@ -18,6 +18,10 @@ Config YAML keys:
     load_totalseg:   bool  True  (TotalSegmentator pretrained 로드)
     t_classes:       int   4
     n_classes:       int   2
+    manifold_mixup:
+      enable:        bool  True
+      alpha:         float 2.0
+      prob:          float 1.0
 """
 
 import os
@@ -41,9 +45,22 @@ def parse_args():
     return p.parse_args()
 
 
-def train_one_epoch(model, loader, optimizer, criterion, scaler, device, epoch):
+def train_one_epoch(
+    model,
+    loader,
+    optimizer,
+    criterion,
+    scaler,
+    device,
+    epoch,
+    manifold_mixup_enable=True,
+    manifold_mixup_alpha=2.0,
+    manifold_mixup_prob=1.0,
+):
     model.train()
     total_loss = 0.0
+    mixup_applied_steps = 0
+    mixup_lam_sum = 0.0
 
     for step, batch in enumerate(loader):
         image  = batch['image'].to(device)
@@ -55,7 +72,14 @@ def train_one_epoch(model, loader, optimizer, criterion, scaler, device, epoch):
 
         optimizer.zero_grad()
         with autocast():
-            outputs = model(image)
+            outputs = model(
+                image,
+                apply_manifold_mixup=manifold_mixup_enable,
+                mixup_alpha=manifold_mixup_alpha,
+                mixup_prob=manifold_mixup_prob,
+            )
+            mixup_lam = outputs.get('mixup_lam')
+            mixup_perm = outputs.get('mixup_perm')
             loss, loss_dict = criterion(
                 t_seg_logit=outputs['t_seg'],
                 n_seg_logit=outputs['n_seg'],
@@ -65,6 +89,8 @@ def train_one_epoch(model, loader, optimizer, criterion, scaler, device, epoch):
                 n_seg_gt=None,
                 t_stage_gt=tstage,
                 n_stage_gt=nstage,
+                mixup_lam=mixup_lam,
+                mixup_perm=mixup_perm,
             )
 
         scaler.scale(loss).backward()
@@ -74,10 +100,23 @@ def train_one_epoch(model, loader, optimizer, criterion, scaler, device, epoch):
         scaler.update()
 
         total_loss += loss.item()
+        mixup_applied = mixup_lam is not None and mixup_perm is not None
+        if mixup_applied:
+            mixup_applied_steps += 1
+            mixup_lam_sum += float(mixup_lam)
+
+        loss_dict['mixup_applied'] = float(mixup_applied)
+        loss_dict['lam'] = float(mixup_lam) if mixup_lam is not None else 1.0
 
         if step % 20 == 0:
             parts = [f"{k}={v:.4f}" for k, v in loss_dict.items()]
             print(f"  [E{epoch} S{step}] loss={loss.item():.4f} | {' '.join(parts)}")
+
+    avg_lam = mixup_lam_sum / mixup_applied_steps if mixup_applied_steps > 0 else 1.0
+    print(
+        f"  [E{epoch}] mixup_applied_steps={mixup_applied_steps}/{len(loader)} "
+        f"avg_lam={avg_lam:.4f}"
+    )
 
     return total_loss / len(loader)
 
@@ -123,6 +162,11 @@ def main():
     args   = parse_args()
     with open(args.config) as f:
         cfg = yaml.safe_load(f)
+
+    manifold_mixup_cfg = cfg.get('manifold_mixup', {})
+    manifold_mixup_enable = manifold_mixup_cfg.get('enable', True)
+    manifold_mixup_alpha = manifold_mixup_cfg.get('alpha', 2.0)
+    manifold_mixup_prob = manifold_mixup_cfg.get('prob', 1.0)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"[finetune] device: {device}")
@@ -194,7 +238,10 @@ def main():
 
     for epoch in range(1, num_epochs + 1):
         train_loss = train_one_epoch(model, train_loader, optimizer,
-                                     criterion, scaler, device, epoch)
+                                     criterion, scaler, device, epoch,
+                                     manifold_mixup_enable=manifold_mixup_enable,
+                                     manifold_mixup_alpha=manifold_mixup_alpha,
+                                     manifold_mixup_prob=manifold_mixup_prob)
         val_loss, acc_t, acc_n = validate(model, val_loader, criterion, device)
         scheduler.step()
 

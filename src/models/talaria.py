@@ -54,7 +54,15 @@ class TALARIAModel(nn.Module):
         if load_totalseg:
             self.encoder.load_totalsegmentator_weights()
 
-    def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
+    def forward(
+        self,
+        x: torch.Tensor,
+        apply_manifold_mixup: bool = True,
+        mixup_alpha: float = 2.0,
+        mixup_prob: float = 1.0,
+        perm_idx: Optional[torch.Tensor] = None,
+        lam: Optional[float] = None,
+    ) -> Dict[str, object]:
         """
         Args:
             x: (B, 1, D, H, W)  CT volume
@@ -64,16 +72,29 @@ class TALARIAModel(nn.Module):
                 'n_seg':    (B, 1, D, H, W)   LN segmentation logit
                 't_cls':    (B, t_classes)     T-stage logit
                 'n_cls':    (B, n_classes)     N-stage logit
+                'mixup_lam': Optional[float]        manifold mixup lambda
+                'mixup_perm': Optional[torch.Tensor] manifold mixup permutation
+                'mixup_applied': bool               manifold mixup applied flag
         """
         shallow, deep, skips = self.encoder(x)
         t_seg, n_seg = self.seg_head(shallow, deep, skips)
-        t_cls, n_cls = self.cls_head(deep)
+        t_cls, n_cls, mixup_meta = self.cls_head(
+            deep,
+            apply_manifold_mixup=apply_manifold_mixup,
+            mixup_alpha=mixup_alpha,
+            mixup_prob=mixup_prob,
+            perm_idx=perm_idx,
+            lam=lam,
+        )
 
         return {
             't_seg': t_seg,
             'n_seg': n_seg,
             't_cls': t_cls,
             'n_cls': n_cls,
+            'mixup_lam': mixup_meta['mixup_lam'],
+            'mixup_perm': mixup_meta['mixup_perm'],
+            'mixup_applied': mixup_meta['mixup_applied'],
         }
 
     def load_pretrain_checkpoint(self, ckpt_path: str):
@@ -96,4 +117,4 @@ if __name__ == '__main__':
     vol   = torch.randn(2, 1, 96, 96, 96)
     out   = model(vol)
     for k, v in out.items():
-        print(f"{k}: {v.shape}")
+        print(f"{k}: {v.shape if torch.is_tensor(v) else v}")
