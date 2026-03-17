@@ -78,8 +78,13 @@ class TALARIAModel(nn.Module):
         """
         shallow, deep, skips = self.encoder(x)
         t_seg, n_seg = self.seg_head(shallow, deep, skips)
+
+        # T-stage head에 seg prob map 전달 (morphological feature 추출용)
+        t_seg_prob = torch.sigmoid(t_seg.detach())   # gradient 차단 (seg head 학습과 분리)
+
         t_cls, n_cls, mixup_meta = self.cls_head(
             deep,
+            t_seg_prob=t_seg_prob,
             apply_manifold_mixup=apply_manifold_mixup,
             mixup_alpha=mixup_alpha,
             mixup_prob=mixup_prob,
