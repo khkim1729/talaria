@@ -14,6 +14,7 @@ Usage:
 
 import os
 import argparse
+import random
 import yaml
 import torch
 import numpy as np
@@ -21,8 +22,16 @@ import SimpleITK as sitk
 from typing import List, Optional
 
 from src.models.talaria import TALARIANet, build_talaria
-from src.data.preprocessing import preprocess_ct, stitch_patches
-from src.inference.tta import TTAPredictor
+from src.data.preprocessing import preprocess_ct
+from src.inference.tta import TTAPredictor, TTTAdaptor
+
+
+def set_inference_seed(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 # ---------------------------------------------------------------------------
@@ -36,6 +45,14 @@ def run_inference(
     stride: int = 48,
     device: torch.device = None,
     seg_threshold: float = 0.5,
+    enable_ttt: bool = False,
+    ttt_steps: int = 1,
+    ttt_lr: float = 1e-5,
+    ttt_modules: Optional[List[str]] = None,
+    ttt_objective: str = 'entropy',
+    ttt_reset_scope: str = 'volume',
+    ttt_use_amp: bool = False,
+    seed: int = 42,
 ) -> dict:
     """
     Full inference pipeline on a single CT NIfTI file.
@@ -55,11 +72,31 @@ def run_inference(
     if device is None:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    patches, coords, vol_shape = preprocess_ct(nifti_path, patch_size, stride)
+    set_inference_seed(seed)
 
-    predictor = TTAPredictor(model, device=device)
+    patches, coords, vol_shape = preprocess_ct(nifti_path, patch_size, stride)
     patch_tensors = [torch.from_numpy(p).unsqueeze(0).unsqueeze(0) for p in patches]
 
+    if enable_ttt:
+        scope = 'patch' if ttt_reset_scope == 'patch' else 'volume'
+        print(
+            f"[TTT] enabled=True steps={ttt_steps} lr={ttt_lr} modules={ttt_modules} "
+            f"objective={ttt_objective} reset_scope={ttt_reset_scope} amp={ttt_use_amp} device={device}"
+        )
+        adaptor = TTTAdaptor(
+            model=model,
+            steps=ttt_steps,
+            lr=ttt_lr,
+            adapt_modules=ttt_modules,
+            objective=ttt_objective,
+            reset_each_volume=True,
+            use_amp=ttt_use_amp,
+            device=device,
+        )
+        adaptor.adapt_volume(patch_tensors, scope=scope)
+
+    predictor = TTAPredictor(model, device=device)
+    print('[TTA] running final prediction with model.eval()')
     volume_preds = predictor.predict_volume(patch_tensors, coords, vol_shape, patch_size)
 
     t_seg_prob = volume_preds['t_seg'].squeeze().numpy()
@@ -96,6 +133,14 @@ def soft_voting_ensemble(
     patch_size: int = 96,
     stride: int = 48,
     seg_threshold: float = 0.5,
+    enable_ttt: bool = False,
+    ttt_steps: int = 1,
+    ttt_lr: float = 1e-5,
+    ttt_modules: Optional[List[str]] = None,
+    ttt_objective: str = 'entropy',
+    ttt_reset_scope: str = 'volume',
+    ttt_use_amp: bool = False,
+    seed: int = 42,
 ):
     """
     Ensemble multiple model checkpoints via soft probability averaging.
@@ -124,7 +169,22 @@ def soft_voting_ensemble(
         model.load_state_dict(ckpt.get('model_state_dict', ckpt), strict=False)
         model.eval()
 
-        result = run_inference(model, nifti_path, patch_size, stride, device, seg_threshold)
+        result = run_inference(
+            model=model,
+            nifti_path=nifti_path,
+            patch_size=patch_size,
+            stride=stride,
+            device=device,
+            seg_threshold=seg_threshold,
+            enable_ttt=enable_ttt,
+            ttt_steps=ttt_steps,
+            ttt_lr=ttt_lr,
+            ttt_modules=ttt_modules,
+            ttt_objective=ttt_objective,
+            ttt_reset_scope=ttt_reset_scope,
+            ttt_use_amp=ttt_use_amp,
+            seed=seed,
+        )
 
         if t_seg_acc is None:
             t_seg_acc   = result['t_seg_prob'].copy()
@@ -199,6 +259,23 @@ if __name__ == '__main__':
     parser.add_argument('--output',     type=str, required=True,
                         help='Output directory')
     parser.add_argument('--threshold',  type=float, default=0.5)
+    parser.add_argument('--seed', type=int, default=42,
+                        help='Random seed for reproducibility')
+
+    parser.add_argument('--enable_ttt', action='store_true',
+                        help='Enable test-time training adaptation before TTA prediction')
+    parser.add_argument('--ttt_steps', type=int, default=1,
+                        help='Number of adaptation steps')
+    parser.add_argument('--ttt_lr', type=float, default=1e-5,
+                        help='Learning rate for TTT optimizer')
+    parser.add_argument('--ttt_modules', type=str, nargs='+', default=['bn', 'head'],
+                        help='Module name keywords to adapt (e.g. bn head)')
+    parser.add_argument('--ttt_objective', type=str, default='entropy', choices=['entropy'],
+                        help='Unsupervised TTT objective')
+    parser.add_argument('--ttt_reset_scope', type=str, default='volume', choices=['volume', 'patch'],
+                        help='TTT adaptation granularity')
+    parser.add_argument('--ttt_use_amp', action='store_true',
+                        help='Use AMP during TTT adaptation')
     args = parser.parse_args()
 
     with open(args.config) as f:
@@ -213,4 +290,12 @@ if __name__ == '__main__':
         patch_size=config.get('patch_size', 96),
         stride=config.get('stride', 48),
         seg_threshold=args.threshold,
+        enable_ttt=args.enable_ttt,
+        ttt_steps=args.ttt_steps,
+        ttt_lr=args.ttt_lr,
+        ttt_modules=args.ttt_modules,
+        ttt_objective=args.ttt_objective,
+        ttt_reset_scope=args.ttt_reset_scope,
+        ttt_use_amp=args.ttt_use_amp,
+        seed=args.seed,
     )

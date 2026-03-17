@@ -117,6 +117,22 @@ class TALARIAModel(nn.Module):
         print(f"  encoder missing: {len(missing)}, unexpected: {len(unexpected)}")
 
 
+# Backward-compatible aliases used by inference modules
+TALARIANet = TALARIAModel
+
+
+def build_talaria(config: Optional[dict] = None) -> TALARIAModel:
+    """Build TALARIA model from a config dict for inference/training utilities."""
+    config = config or {}
+    return TALARIAModel(
+        in_channels=config.get('in_channels', 1),
+        t_classes=config.get('t_classes', 4),
+        n_classes=config.get('n_classes', 2),
+        dropout=config.get('dropout', 0.3),
+        load_totalseg=config.get('load_totalseg', False),
+    )
+
+
 if __name__ == '__main__':
     model = TALARIAModel(load_totalseg=False)
     vol   = torch.randn(2, 1, 96, 96, 96)
