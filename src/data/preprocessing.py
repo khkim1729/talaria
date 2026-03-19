@@ -167,6 +167,22 @@ def extract_patches(
 
     return patches, coords
 
+def clip_and_normalize(volume, hu_min=-100.0, hu_max=400.0):
+    """hu_windowing의 alias — dataset.py 호환용"""
+    return hu_windowing(volume, hu_min, hu_max)
+
+def load_mask(mask_path, target_shape=None):
+    """Segmentation mask NIfTI 로드"""
+    import SimpleITK as sitk
+    img = sitk.ReadImage(mask_path)
+    mask = sitk.GetArrayFromImage(img).astype(np.uint8)
+    if target_shape is not None and mask.shape != target_shape:
+        from scipy.ndimage import zoom
+        factors = tuple(t/s for t, s in zip(target_shape, mask.shape))
+        from scipy.ndimage import zoom
+        mask = zoom(mask, factors, order=0).astype(np.uint8)
+    return mask
+
 
 def stitch_patches(
     patches: List[np.ndarray],
