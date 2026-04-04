@@ -1,38 +1,40 @@
-# =============================================================================
-# TALARIA Phase 1: Self-Supervised Pre-training Configuration
-# =============================================================================
+# TALARIA Phase 1: Self-Supervised Pre-training
 
-# --- Model Architecture ---
-embed_dim:        192
-token_patch_size: 8         # tokenization patch size (cubic)
+# Model Architecture
+embed_dim:        320
+token_patch_size: 16
 depth:            12
 d_state:          16
 expand:           2
 drop:             0.1
 
-# --- Reconstruction Decoder ---
+# Reconstruction Decoder
 decoder_dim: 128
 
-# --- Masking ---
-mask_ratio:  0.40     # Fraction of tokens to mask
+# Masking
+mask_ratio: 0.50
 
-# --- Dataset Paths ---
-lits_root:  /path/to/lits
-tcia_root:  /path/to/tcia
-amos_root:  /path/to/amos
+# Dataset Paths
+lits_root:  null
+tcia_root:  /home/introai14/talaria/talaria_v5/nii_subset
 
-# --- Patch Extraction ---
-volume_patch_size: 96       # sliding window size (voxels)
-stride:            48       # 50% overlap
+# Multi-scale patch ensemble
+patch_sizes: [96, 128]
+strides_ms:  [48, 64]
 
-# --- Training ---
+# Training
 epochs:      100
-batch_size:  4
-num_workers: 4
+batch_size:  2
+num_workers: 0
 
-# --- Optimizer ---
+# Optimizer
 lr:           1.0e-4
 weight_decay: 0.05
 
-# --- Checkpoint ---
-save_every: 10
+# Checkpoint
+save_every: 2
+data_dir:  /home/introai14/projects/talaria-main/datasets/Task03_Liver
+json_path: /home/introai14/projects/talaria-main/datasets/Task03_Liver/dataset.json
+num_workers: 4
+w_mae: 1.0
+w_rot: 0.2

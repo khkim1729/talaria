@@ -165,14 +165,13 @@ def main():
 
     manifold_mixup_cfg = cfg.get('manifold_mixup', {})
     manifold_mixup_enable = manifold_mixup_cfg.get('enable', True)
-    manifold_mixup_alpha = manifold_mixup_cfg.get('alpha', 2.0)
-    manifold_mixup_prob = manifold_mixup_cfg.get('prob', 1.0)
+    manifold_mixup_alpha  = manifold_mixup_cfg.get('alpha', 2.0)
+    manifold_mixup_prob   = manifold_mixup_cfg.get('prob', 1.0)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"[finetune] device: {device}")
 
     # ── Model ────────────────────────────────────────────────────────────────
-    # pretrain_ckpt 있으면 그걸 우선, 없으면 TotalSegmentator weight 사용
     load_totalseg = cfg.get('load_totalseg', True) and (args.pretrain_ckpt is None)
 
     model = TALARIAModel(
@@ -212,67 +211,136 @@ def main():
     val_loader   = DataLoader(val_ds,   batch_size=1,
                               shuffle=False, num_workers=2, pin_memory=True)
 
-    # ── Optimizer / Scheduler ─────────────────────────────────────────────
-    optimizer = torch.optim.AdamW([
-        {'params': model.encoder.parameters(), 'lr': 1e-5},
-        {'params': model.seg_head.parameters(), 'lr': 1e-4},
-        {'params': model.cls_head.parameters(), 'lr': 1e-4},
-    ],
-        weight_decay=cfg.get('weight_decay', 1e-5),
-    )
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=cfg.get('num_epochs', 100)
-    )
-    criterion = TALARIALoss()
-    scaler    = GradScaler()
-
     # ── Output dirs ──────────────────────────────────────────────────────────
     exp_name = f"finetune_p{patch_size}"
     exp_dir  = os.path.join(cfg.get('experiment_dir', 'experiments'), exp_name)
     ckpt_dir = os.path.join(exp_dir, 'checkpoints')
     os.makedirs(ckpt_dir, exist_ok=True)
 
-    # ── Training loop ────────────────────────────────────────────────────────
-    best_val_loss = float('inf')
-    num_epochs    = cfg.get('num_epochs', 100)
+    criterion = TALARIALoss()
+    scaler    = GradScaler()
 
-    for epoch in range(1, num_epochs + 1):
-        train_loss = train_one_epoch(model, train_loader, optimizer,
-                                     criterion, scaler, device, epoch,
-                                     manifold_mixup_enable=manifold_mixup_enable,
-                                     manifold_mixup_alpha=manifold_mixup_alpha,
-                                     manifold_mixup_prob=manifold_mixup_prob)
+    # =========================================================
+    # Phase 3a: Segmentation Head만 학습 (cls head freeze)
+    # =========================================================
+    seg_epochs = cfg.get('seg_epochs', 50)
+    print(f"\n[Phase 3a] Segmentation-only training ({seg_epochs} epochs)")
+
+    # cls_head freeze
+    for p in model.cls_head.parameters():
+        p.requires_grad = False
+
+    optimizer_seg = torch.optim.AdamW([
+        {'params': model.encoder.parameters(),  'lr': 1e-5},
+        {'params': model.seg_head.parameters(), 'lr': cfg.get('seg_lr', 3e-4)},
+    ], weight_decay=cfg.get('weight_decay', 1e-5))
+    scheduler_seg = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer_seg, T_max=seg_epochs
+    )
+
+    best_seg_loss = float('inf')
+
+    for epoch in range(1, seg_epochs + 1):
+        # seg loss만 활성화 (cls weight=0)
+        criterion.t_cls_w = 0.0
+        criterion.n_cls_w = 0.0
+
+        train_loss = train_one_epoch(
+            model, train_loader, optimizer_seg, criterion, scaler, device, epoch,
+            manifold_mixup_enable=False,   # Phase 3a에서는 mixup 끔
+        )
         val_loss, acc_t, acc_n = validate(model, val_loader, criterion, device)
-        scheduler.step()
+        scheduler_seg.step()
 
-        print(f"[E{epoch}/{num_epochs}] "
+        print(f"[3a E{epoch:03d}/{seg_epochs}] "
               f"train={train_loss:.4f} val={val_loss:.4f} "
               f"acc_T={acc_t:.3f} acc_N={acc_n:.3f} "
-              f"lr={scheduler.get_last_lr()[0]:.2e}")
+              f"lr={scheduler_seg.get_last_lr()[0]:.2e}")
 
-        # Save best
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            ckpt_path = os.path.join(ckpt_dir, 'best.ckpt')
+        if val_loss < best_seg_loss:
+            best_seg_loss = val_loss
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
+                'val_loss': val_loss,
+                'phase': '3a',
+            }, os.path.join(ckpt_dir, 'best_seg.ckpt'))
+            print(f"  ✓ Best seg saved")
+
+    # =========================================================
+    # Phase 3b: Classification Head만 학습 (seg head freeze)
+    # =========================================================
+    cls_epochs = cfg.get('cls_epochs', 50)
+    print(f"\n[Phase 3b] Classification-only training ({cls_epochs} epochs)")
+
+    # 최선 seg checkpoint 로드
+    best_seg_path = os.path.join(ckpt_dir, 'best_seg.ckpt')
+    if os.path.exists(best_seg_path):
+        ckpt = torch.load(best_seg_path, map_location=device)
+        model.load_state_dict(ckpt['model_state_dict'])
+        print(f"  Loaded best seg ckpt (val_loss={ckpt['val_loss']:.4f})")
+
+    # seg_head freeze, cls_head unfreeze
+    for p in model.seg_head.parameters():
+        p.requires_grad = False
+    for p in model.encoder.parameters():
+        p.requires_grad = False
+    for p in model.cls_head.parameters():
+        p.requires_grad = True
+
+    optimizer_cls = torch.optim.AdamW(
+        model.cls_head.parameters(),
+        lr=cfg.get('cls_lr', 1e-4),
+        weight_decay=cfg.get('weight_decay', 1e-5),
+    )
+    scheduler_cls = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer_cls, T_max=cls_epochs
+    )
+
+    # cls loss만 활성화
+    criterion.t_seg_w = 0.0
+    criterion.n_seg_w = 0.0
+    criterion.t_cls_w = cfg.get('t_cls_weight', 0.5)
+    criterion.n_cls_w = cfg.get('n_cls_weight', 0.5)
+
+    best_val_loss = float('inf')
+
+    for epoch in range(1, cls_epochs + 1):
+        train_loss = train_one_epoch(
+            model, train_loader, optimizer_cls, criterion, scaler, device, epoch,
+            manifold_mixup_enable=manifold_mixup_enable,
+            manifold_mixup_alpha=manifold_mixup_alpha,
+            manifold_mixup_prob=manifold_mixup_prob,
+        )
+        val_loss, acc_t, acc_n = validate(model, val_loader, criterion, device)
+        scheduler_cls.step()
+
+        print(f"[3b E{epoch:03d}/{cls_epochs}] "
+              f"train={train_loss:.4f} val={val_loss:.4f} "
+              f"acc_T={acc_t:.3f} acc_N={acc_n:.3f} "
+              f"lr={scheduler_cls.get_last_lr()[0]:.2e}")
+
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer_cls.state_dict(),
                 'val_loss': val_loss,
                 'acc_t': acc_t,
                 'acc_n': acc_n,
                 'config': cfg,
-            }, ckpt_path)
-            print(f"  ✓ Best saved: {ckpt_path}")
+                'phase': '3b',
+            }, os.path.join(ckpt_dir, 'best.ckpt'))
+            print(f"  ✓ Best saved: val={val_loss:.4f} acc_T={acc_t:.3f} acc_N={acc_n:.3f}")
 
-        # Save latest
         torch.save({
             'epoch': epoch,
             'model_state_dict': model.state_dict(),
         }, os.path.join(ckpt_dir, 'latest.ckpt'))
 
-    print(f"\n[finetune] Done. Best val loss: {best_val_loss:.4f}")
-
-
+    print(f"\n[finetune] Done.")
+    print(f"  Phase 3a best seg loss : {best_seg_loss:.4f}")
+    print(f"  Phase 3b best val loss : {best_val_loss:.4f}")
 if __name__ == '__main__':
     main()

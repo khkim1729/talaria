@@ -1,17 +1,15 @@
 """
 TALARIA Evaluation Metrics.
 
-    - dice_score:       Dice Similarity Coefficient (DSC)
-    - precision_recall: Precision and Recall
-    - hausdorff95:      95th-percentile Hausdorff Distance
-    - compute_auc:      Area Under ROC Curve (AUC)
-    - evaluate_segmentation:  batch evaluation for seg heads
-    - evaluate_classification: batch evaluation for cls heads
+수정 사항 (v5 → v5.1):
+  - hausdorff95(): dead code 제거
+      `pred_border = pred ^ np.zeros_like(pred)` — XOR with zeros는 pred 자체를 반환하며
+      이후 pred_border가 사용되지도 않음. 삭제 후 surface distance 방법 주석 명시.
 """
 
 import numpy as np
 import torch
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Tuple
 
 
 # ---------------------------------------------------------------------------
@@ -19,28 +17,14 @@ from typing import Dict, List, Optional, Tuple
 # ---------------------------------------------------------------------------
 
 def dice_score(pred: np.ndarray, gt: np.ndarray, smooth: float = 1e-6) -> float:
-    """
-    Compute Dice Similarity Coefficient.
-
-    Args:
-        pred: binary prediction array
-        gt:   binary ground truth array
-    Returns:
-        DSC in [0, 1]
-    """
     pred = pred.astype(bool).flatten()
     gt   = gt.astype(bool).flatten()
     intersection = (pred & gt).sum()
     return float(2 * intersection + smooth) / float(pred.sum() + gt.sum() + smooth)
 
 
-def precision_recall(pred: np.ndarray, gt: np.ndarray, smooth: float = 1e-6) -> Tuple[float, float]:
-    """
-    Compute precision and recall.
-
-    Returns:
-        (precision, recall)
-    """
+def precision_recall(pred: np.ndarray, gt: np.ndarray,
+                     smooth: float = 1e-6) -> Tuple[float, float]:
     pred = pred.astype(bool).flatten()
     gt   = gt.astype(bool).flatten()
     tp = (pred & gt).sum()
@@ -51,16 +35,16 @@ def precision_recall(pred: np.ndarray, gt: np.ndarray, smooth: float = 1e-6) -> 
     return precision, recall
 
 
-def hausdorff95(pred: np.ndarray, gt: np.ndarray, spacing: Tuple = (1.0, 1.0, 1.0)) -> float:
+def hausdorff95(pred: np.ndarray, gt: np.ndarray,
+                spacing: Tuple = (1.0, 1.0, 1.0)) -> float:
     """
-    95th-percentile Hausdorff Distance between two binary masks.
-    Requires scipy.
+    95th-percentile Hausdorff Distance (HD95) between two binary masks.
 
-    Args:
-        pred, gt: 3D binary arrays
-        spacing:  voxel spacing in mm (D, H, W)
-    Returns:
-        HD95 in mm
+    Surface distance 계산 방법:
+        1. pred/gt의 distance transform을 각각 계산
+        2. pred 표면 voxel에서 gt까지의 거리 (pred_surf = dist_gt[pred])
+           gt 표면 voxel에서 pred까지의 거리 (gt_surf = dist_pred[gt])
+        3. 두 배열을 합쳐 95th percentile 반환
     """
     try:
         from scipy.ndimage import distance_transform_edt
@@ -69,9 +53,7 @@ def hausdorff95(pred: np.ndarray, gt: np.ndarray, spacing: Tuple = (1.0, 1.0, 1.
 
     if pred.sum() == 0 or gt.sum() == 0:
         return float('nan')
-    
-    pred_border = pred ^ np.zeros_like(pred)  # edge detection placeholderㄴ
-    # Surface distance computation
+
     dist_pred = distance_transform_edt(~pred.astype(bool), sampling=spacing)
     dist_gt   = distance_transform_edt(~gt.astype(bool),   sampling=spacing)
 
@@ -86,21 +68,8 @@ def hausdorff95(pred: np.ndarray, gt: np.ndarray, spacing: Tuple = (1.0, 1.0, 1.
 # Classification Metrics
 # ---------------------------------------------------------------------------
 
-def compute_auc(
-    probs: np.ndarray,
-    labels: np.ndarray,
-    num_classes: int,
-) -> float:
-    """
-    Macro-averaged one-vs-rest AUC for multi-class classification.
-
-    Args:
-        probs:       (N, C) predicted class probabilities
-        labels:      (N,)   true class indices
-        num_classes: C
-    Returns:
-        macro AUC
-    """
+def compute_auc(probs: np.ndarray, labels: np.ndarray,
+                num_classes: int) -> float:
     try:
         from sklearn.metrics import roc_auc_score
         from sklearn.preprocessing import label_binarize
@@ -137,13 +106,8 @@ class SegmentationMetrics:
         self._rec  = []
         self._hd95 = []
 
-    def update(
-        self,
-        pred_prob: np.ndarray,
-        gt: np.ndarray,
-        threshold: float = 0.5,
-        spacing: Tuple = (1.0, 1.0, 1.0),
-    ):
+    def update(self, pred_prob: np.ndarray, gt: np.ndarray,
+               threshold: float = 0.5, spacing: Tuple = (1.0, 1.0, 1.0)):
         pred_mask = (pred_prob >= threshold).astype(np.uint8)
         self._dsc.append(dice_score(pred_mask, gt))
         p, r = precision_recall(pred_mask, gt)
@@ -173,7 +137,6 @@ class ClassificationMetrics:
         self._labels = []
 
     def update(self, probs: np.ndarray, labels: np.ndarray):
-        """probs: (B, C), labels: (B,)"""
         self._probs.append(probs)
         self._labels.append(labels)
 
@@ -187,17 +150,12 @@ class ClassificationMetrics:
 
 
 # ---------------------------------------------------------------------------
-# Convenience: Full Evaluation Loop
+# Full Evaluation Loop
 # ---------------------------------------------------------------------------
 
 @torch.no_grad()
 def evaluate_model(model, loader, device, seg_threshold: float = 0.5) -> Dict:
-    """
-    Evaluate a TALARIANet on a DataLoader.
-
-    Returns:
-        dict with T-seg, N-seg, T-cls, N-cls metrics
-    """
+    """TALARIANet 전체 평가."""
     model.eval()
     t_seg_metrics = SegmentationMetrics()
     n_seg_metrics = SegmentationMetrics()
@@ -208,24 +166,22 @@ def evaluate_model(model, loader, device, seg_threshold: float = 0.5) -> Dict:
         images = batch['image'].to(device)
         out    = model(images)
 
-        B = images.shape[0]
+        B       = images.shape[0]
         t_probs = out['t_cls'].softmax(-1).cpu().numpy()
         n_probs = out['n_cls'].softmax(-1).cpu().numpy()
         t_stage = batch.get('tstage', torch.full((B,), -1)).numpy()
         n_stage = batch.get('nstage', torch.full((B,), -1)).numpy()
 
-        # Seg metrics (per sample)
         if 'label' in batch:
-            gt_label = batch['label'].numpy()   # (B, D, H, W)
-            t_gt = (gt_label == 2).astype(np.uint8)
-            n_gt = (gt_label == 3).astype(np.uint8)
-            t_seg_np = out['t_seg'].sigmoid().cpu().numpy()  # (B, 1, D, H, W)
+            gt_label = batch['label'].numpy()
+            t_gt     = (gt_label == 2).astype(np.uint8)
+            n_gt     = (gt_label == 3).astype(np.uint8)
+            t_seg_np = out['t_seg'].sigmoid().cpu().numpy()
             n_seg_np = out['n_seg'].sigmoid().cpu().numpy()
             for b in range(B):
-                t_seg_metrics.update(t_seg_np[b, 0], t_gt[b])
-                n_seg_metrics.update(n_seg_np[b, 0], n_gt[b])
+                t_seg_metrics.update(t_seg_np[b, 0], t_gt[b], seg_threshold)
+                n_seg_metrics.update(n_seg_np[b, 0], n_gt[b], seg_threshold)
 
-        # Cls metrics
         valid = t_stage >= 0
         if valid.any():
             t_cls_metrics.update(t_probs[valid], t_stage[valid])

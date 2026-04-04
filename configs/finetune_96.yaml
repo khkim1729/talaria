@@ -1,23 +1,21 @@
-# TALARIA Phase 3 Fine-tuning — patch size 96
-
-data_root:      /home/introai14/talaria/data/HCC_TACE
-metadata_path:  /home/introai14/talaria/data/hcc_tnm_labels.json
-
+# TALARIA Phase 3 Fine-tuning - patch size 96
+data_root:      /home/introai14/projects/talaria-main/datasets/HCC-TACE-Seg-v2
+metadata_path:  /home/introai14/.aaron/users/jyyoo/projects/talaria-main/datasets/hcc_tnm_labels.json
 patch_size:     96
 batch_size:     2
 num_epochs:     100
 lr:             1.0e-4
 weight_decay:   1.0e-5
 dropout:        0.3
-
 in_channels:    1
 t_classes:      4
 n_classes:      2
-
 load_totalseg:  true
 experiment_dir: /home/introai14/talaria/experiments
-
-# Optional manifold mixup during training only
+seg_epochs:     50
+seg_lr:         3.0e-4
+cls_epochs:     50
+cls_lr:         1.0e-4
 manifold_mixup:
   enable: true
   alpha: 2.0

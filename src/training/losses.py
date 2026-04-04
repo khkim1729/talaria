@@ -261,10 +261,10 @@ class TALARIALoss(nn.Module):
 
         self.t_seg_loss = BCEDiceLoss(bce_weight=0.5, dice_weight=0.5)
         self.n_seg_loss = FocalTverskyLoss(alpha=0.3, beta=0.7, gamma=0.75)
-        self.register_buffer('t_cls_weight', torch.tensor([1.0, 1.3, 0.8, 0.7], dtype=torch.float32))
-        self.register_buffer('n_cls_weight', torch.tensor([1.0, 6.5], dtype=torch.float32))
-        self.t_cls_loss = nn.CrossEntropyLoss(weight=self.t_cls_weight, ignore_index=-1)
-        self.n_cls_loss = nn.CrossEntropyLoss(weight=self.n_cls_weight, ignore_index=-1)
+        self.register_buffer('t_cls_weight', torch.tensor([0.7, 1.0, 1.2, 1.3], dtype=torch.float32))
+        self.register_buffer('n_cls_weight', torch.tensor([1.0, 3.5], dtype=torch.float32))
+       # self.t_cls_loss = nn.CrossEntropyLoss(weight=self.t_cls_weight, ignore_index=-1)
+       # self.n_cls_loss = nn.CrossEntropyLoss(weight=self.n_cls_weight, ignore_index=-1)
 
     def _soft_cross_entropy(
         self,
@@ -278,7 +278,7 @@ class TALARIALoss(nn.Module):
         if class_weight is None:
             return -(soft_targets * log_probs).sum(dim=-1).mean()
 
-        weighted_targets = soft_targets * class_weight.unsqueeze(0)
+        weighted_targets = soft_targets * class_weight.to(soft_targets.device).unsqueeze(0)
         normalizer = weighted_targets.sum(dim=-1).clamp_min(1e-12)
         return (-(weighted_targets * log_probs).sum(dim=-1) / normalizer).mean()
 
@@ -334,7 +334,13 @@ class TALARIALoss(nn.Module):
                 )
                 l = self._soft_cross_entropy(t_cls_logit, t_soft, self.t_cls_weight)
             else:
-                l = self.t_cls_loss(t_cls_logit, t_stage_gt)
+                t_stage_gt = t_stage_gt.to(t_cls_logit.device)
+                l = F.cross_entropy(
+                    t_cls_logit,
+                    t_stage_gt,
+                    weight=self.t_cls_weight.to(t_cls_logit.device),
+                    ignore_index=-1,
+                )
             losses['t_cls'] = l.item()
             total = total + self.t_cls_w * l
 
@@ -351,7 +357,13 @@ class TALARIALoss(nn.Module):
                 )
                 l = self._soft_cross_entropy(n_cls_logit, n_soft, self.n_cls_weight)
             else:
-                l = self.n_cls_loss(n_cls_logit, n_stage_gt)
+                n_stage_gt = n_stage_gt.to(n_cls_logit.device)
+                l = F.cross_entropy(
+                    n_cls_logit,
+                    n_stage_gt,
+                    weight=self.n_cls_weight.to(n_cls_logit.device),
+                    ignore_index=-1,
+                )
             losses['n_cls'] = l.item()
             total = total + self.n_cls_w * l
 

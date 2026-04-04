@@ -78,8 +78,10 @@ class TALARIAModel(nn.Module):
         """
         shallow, deep, skips = self.encoder(x)
         t_seg, n_seg = self.seg_head(shallow, deep, skips)
+        t_seg_prob = torch.sigmoid(t_seg).detach()
         t_cls, n_cls, mixup_meta = self.cls_head(
             deep,
+            t_seg_prob=t_seg_prob,
             apply_manifold_mixup=apply_manifold_mixup,
             mixup_alpha=mixup_alpha,
             mixup_prob=mixup_prob,

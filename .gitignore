@@ -1,101 +1,11 @@
-# =============================================================================
-# TALARIA Project .gitignore
-# Python / PyTorch / Medical Imaging
-# =============================================================================
-
-# --- Virtual Environments ---
-.venv/
-venv/
-env/
-ENV/
-.conda/
-
-# --- Python Cache ---
+experiments/
+nii/
+nii_subset/
+npy_cache/
+MSD_Liver/
+datasets/
 __pycache__/
-*.py[cod]
-*$py.class
 *.pyc
-*.pyo
-
-# --- PyTorch / Model Checkpoints (large files) ---
-*.pth
-*.pt
 *.ckpt
-*.safetensors
-*.bin
-
-# --- Medical Imaging Files (large files) ---
-*.nii
 *.nii.gz
-*.dcm
-*.mha
-*.mhd
-*.nrrd
-*.raw
-
-# --- Datasets (large directories) ---
-data/
-datasets/raw/
-datasets/processed/
-
-# --- Experiment Checkpoints ---
-experiments/*/checkpoints/
-experiments/*/logs/*.log
-
-# --- Logs ---
-*.log
-logs/
-*.out
-*.err
-
-# --- macOS ---
-.DS_Store
-.AppleDouble
-.LSOverride
-
-# --- IDE / Editor ---
-.idea/
-.vscode/
-*.swp
-*.swo
-*~
-
-# --- Jupyter Notebooks ---
-.ipynb_checkpoints/
-*.ipynb
-
-# --- Experiment Tracking ---
-wandb/
-.neptune/
-mlruns/
-.mlflow/
-
-# --- Build / Distribution ---
-*.egg-info/
-dist/
-build/
-*.egg
-MANIFEST
-
-# --- Environment Variables ---
-.env
-*.env
-.env.*
-
-# --- Testing ---
-.pytest_cache/
-.coverage
-htmlcov/
-.tox/
-
-# --- Temporary Files ---
-tmp/
-temp/
-*.tmp
-*.bak
-*.orig
-
-# --- Output / Results ---
-outputs/
-results/
-*.png.backup
+*.npy
